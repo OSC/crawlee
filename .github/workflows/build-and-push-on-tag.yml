@@ -5,29 +5,14 @@ on:
     tags:
       - '*'
 
-env:
-  AWS_REGION: us-east-2
-  ECR_REPOSITORY: uiuc-chat-crawlee
-
 jobs:
-  build-and-push-dev:
-    name: Build and Push DEV Crawlee Image
+  build-and-push:
+    name: Build and Push Crawlee Image
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: actions/checkout@v6
 
       - name: Set DEV image tag
         id: set-tag
@@ -69,48 +54,23 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Set PROD image tag
+        uses: actions/checkout@v6
+      - name: Set image tag
         id: set-tag
         run: |
           GIT_TAG=${GITHUB_REF#refs/tags/}
-          PROD_IMAGE_TAG="prod-${GIT_TAG}"
-          echo "PROD_IMAGE_TAG=${PROD_IMAGE_TAG}" >> $GITHUB_ENV
-          echo "prod_image_tag=${PROD_IMAGE_TAG}" >> $GITHUB_OUTPUT
-
-      - name: Build, tag, and push PROD Crawlee image to Amazon ECR
-        id: build-prod-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: |
-          set -euo pipefail
-          echo "Building PROD Crawlee image with tag: $PROD_IMAGE_TAG"
-
-          docker build \
-            --build-arg S3_BUCKET_NAME=${{ vars.S3_BUCKET_NAME }} \
-            --build-arg AWS_REGION=${{ vars.CRAWLEE_AWS_REGION }} \
-            --build-arg AWS_KEY=${{ secrets.PROD_CRAWLEE_AWS_KEY }} \
-            --build-arg AWS_SECRET=${{ secrets.PROD_CRAWLEE_AWS_SECRET }} \
-            --build-arg MINIO_ENDPOINT=${{ vars.MINIO_ENDPOINT }} \
-            --build-arg INGEST_URL=${{ vars.PROD_INGEST_URL }} \
-            --build-arg NO_CRAWL=${{ vars.NO_CRAWL }} \
-            --build-arg PORT=${{ vars.CRAWLEE_PORT }} \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$PROD_IMAGE_TAG .
-
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$PROD_IMAGE_TAG
-
-      - name: Output PROD image tag
-        run: |
-          echo "PROD Crawlee image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.PROD_IMAGE_TAG }}"
+          IMAGE_TAG="${GIT_TAG}"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+      - name: Login to docker registry
+        uses: docker/login-action@v4
+        with:
+          registry: docker-registry.osc.edu
+          username: ${{ secrets.OSC_REGISTRY_ROBOT_OSC_USERNAME }}
+          password: ${{ secrets.OSC_REGISTRY_ROBOT_OSC_TOKEN }}
+      - name: Docker Build and Push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: docker-registry.osc.edu/osc/crawlee:${{ env.IMAGE_TAG }}

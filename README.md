@@ -1,4 +1,5 @@
-# [UIUC.chat](https://uiuc.chat)'s Web Crawler
+**NOTE: This is a fork of the [UIUC chat](https://uiuc.chat)'s (web crawler)[https://github.com/Center-for-AI-Innovation/crawlee] adapted for OSC**
+# OSC.chat's Web Crawler
 
 Hosted on Railway.app. I found Railway preferable to severless functions because it easily handles the large bundle size introduced by using Chromium for full javascript execution during web crawling.
 

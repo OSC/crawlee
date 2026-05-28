@@ -28,6 +28,8 @@ COPY --from=builder --chown=myuser /home/myuser/dist ./dist
 # to speed up the build using Docker layer cache.
 COPY --chown=myuser package*.json ./
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/myuser/pw-browsers
+
 # Install NPM packages, skip optional and development dependencies to
 # keep the image small. Avoid logging too much and print the dependency
 # tree for debugging

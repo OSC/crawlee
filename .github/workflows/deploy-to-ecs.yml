@@ -2,7 +2,7 @@ name: Deploy Crawlee to AWS ECS Fargate
 
 on:
   push:
-    branches: [ illinois-chat ]
+    branches: [ main ]
     paths:
       - 'src/**'
       - 'dist/**'
