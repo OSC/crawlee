@@ -31,4 +31,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: docker-registry.osc.edu/osc/crawlee:${{ env.IMAGE_TAG }}
+          tags: docker-registry.osc.edu/kubernetes/hpcgpt/crawlee:${{ env.IMAGE_TAG }}
