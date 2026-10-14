@@ -55,6 +55,60 @@ export async function crawl(rawConfig: Config) {
                 });
               }
             }
+
+            // Expand all collapsible/toggled elements before extracting text
+            // This ensures dynamically loaded content is rendered in the DOM
+            const expandedCount = await page.evaluate(() => {
+              // Find common patterns for collapsible elements
+              const collapsibleSelectors = [
+                'details',           // HTML5 details/summary
+                'summary',           // Click to expand details
+                '.toggled',          // Custom toggled class
+                '.collapsed',        // Common collapsed class
+                '[aria-expanded="false"]', // ARIA pattern
+                '.accordion-header', // Accordion pattern
+                '.expandable',       // Generic expandable
+              ];
+
+              let expandedCount = 0;
+
+              for (const selector of collapsibleSelectors) {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach(el => {
+                  // Check if element is clickable and not already expanded
+                  const isDetails = el.tagName === 'DETAILS';
+                  const isSummary = el.tagName === 'SUMMARY';
+                  const ariaExpanded = el.getAttribute('aria-expanded');
+                  const hasCollapsedClass = el.classList.contains('collapsed');
+                  const hasToggledClass = el.classList.contains('toggled');
+
+                  // Expand if it's not already expanded
+                  const shouldExpand = isDetails
+                    ? !el.hasAttribute('open')
+                    : isSummary
+                      ? true  // Click summary to toggle details
+                      : ariaExpanded === 'false' || hasCollapsedClass || hasToggledClass;
+
+                  if (shouldExpand) {
+                    try {
+                      // Use native click to trigger JavaScript handlers
+                      el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                      expandedCount++;
+                    } catch (e) {
+                      console.warn(`Failed to click ${selector}:`, e);
+                    }
+                  }
+                });
+              }
+
+              return expandedCount;
+            });
+
+            // Wait for dynamic content to load after expanding
+            await page.waitForTimeout(500); // Give JS time to render expanded content
+
+            log.info(`Expanded ${expandedCount} collapsible elements on ${request.loadedUrl}`);
+
             // page.on('console', message => console.log(`Page log: ${message.text()}`)); // refactored for memory leaks
             const consoleListener = (message: { text: () => any; }) => console.log(`Page log: ${message.text()}`);
             page.on('console', consoleListener);
@@ -261,9 +315,123 @@ async function handlePdf(courseName: string, base_url: string, url: string, docu
 }
 function getPageHtml(page: Page, selector = "body") {
   return page.evaluate((selector) => {
-    // Exclude header, footer, nav from scraping
+    const elementsToRemove = document.querySelectorAll(
+      'script, style, noscript, svg, iframe, video, audio, canvas, object, embed, link, meta, title, area, base, col, command, track, wbr'
+    );
+    elementsToRemove.forEach(element => element.remove());
+
+    // Keep forms/inputs for now but exclude them from text extraction
+    const formElements = document.querySelectorAll('form, input, button, select, textarea');
+    formElements.forEach(element => element.remove());
+
     const elementsToExclude = document.querySelectorAll('header, footer, nav');
     elementsToExclude.forEach(element => element.remove());
+
+    const sidebarElements = document.querySelectorAll('#sidebar-right, .menu-block-wrapper, .block-menu-block');
+    sidebarElements.forEach(element => element.remove());
+
+    // Convert tables to markdown format with explicit boundaries for chunking
+    const tables = document.querySelectorAll('table');
+    tables.forEach((table, tableIndex) => {
+      try {
+        let markdown = '\n\n### TABLE_START ###\n';  // Explicit start marker
+        const rows = table.querySelectorAll('tr');
+
+        rows.forEach((row, rowIndex) => {
+          const cells = row.querySelectorAll('th, td');
+          const cellTexts = Array.from(cells).map(cell => {
+            const text = cell.textContent?.trim() || '';
+            // Normalize whitespace within cells
+            return text.replace(/\s+/g, ' ');
+          });
+
+          markdown += '| ' + cellTexts.join(' | ') + ' |\n';
+
+          // Add separator after header row
+          if (rowIndex === 0 && rows.length > 1 && cellTexts.length > 0) {
+            markdown += '| ' + cellTexts.map(() => '---').join(' | ') + ' |\n';
+          }
+        });
+
+        markdown += '### TABLE_END ###\n\n';  // Explicit end marker
+
+        // Replace table with markdown text node
+        const textNode = document.createTextNode(markdown);
+        table.parentNode?.replaceChild(textNode, table);
+
+        console.log(`Converted table ${tableIndex} to markdown with ${rows.length} rows`);
+      } catch (err) {
+        console.warn(`Failed to convert table to markdown:`, err);
+      }
+    });
+
+    // Add section markers before paragraphs and significant divs to improve chunking boundaries
+    // Only target elements within the main content area to avoid navigation/breadcrumbs
+    try {
+      // First, find the main content container (common patterns across OSC pages)
+      const mainContent = document.querySelector('#content, #main-content, .main-content, article, [role="main"]') || document.body;
+
+      const sections = mainContent.querySelectorAll('p, div');
+      let sectionCount = 0;
+      sections.forEach((section) => {
+        // Skip if already processed (has marker)
+        if (section.previousSibling && section.previousSibling.nodeType === Node.TEXT_NODE) {
+          const prevText = section.previousSibling.textContent || '';
+          if (prevText.includes('### SECTION ###')) {
+            return;
+          }
+        }
+
+        const text = section.textContent?.trim() || '';
+
+        // Only mark if element has significant text content (> 100 chars)
+        if (text.length > 100) {
+          const marker = '\n\n### SECTION ###\n\n';
+          const textNode = document.createTextNode(marker);
+          section.parentNode?.insertBefore(textNode, section);
+          sectionCount++;
+        }
+      });
+      console.log(`Added ${sectionCount} section markers in main content area`);
+    } catch (err) {
+      console.warn(`Failed to add section markers:`, err);
+    }
+
+    // Add markers before toggle/collapsible elements to separate their content
+    try {
+      const togglers = document.querySelectorAll('div.toggled, div.collapsed, details');
+      let togglerCount = 0;
+      togglers.forEach((toggler) => {
+        // Skip if already processed (has marker)
+        if (toggler.previousSibling && toggler.previousSibling.nodeType === Node.TEXT_NODE) {
+          const prevText = toggler.previousSibling.textContent || '';
+          if (prevText.includes('### TOGGLER:')) {
+            return;
+          }
+        }
+
+        // Try to find a title from preceding toggler header or summary
+        let title = 'Section';
+        const prevSibling = toggler.previousElementSibling;
+        if (prevSibling) {
+          const prevTagName = prevSibling.tagName.toLowerCase();
+          if (prevTagName === 'h3' && prevSibling.classList.contains('toggler')) {
+            title = prevSibling.textContent?.trim() || 'Section';
+          } else if (prevTagName === 'summary') {
+            title = prevSibling.textContent?.trim() || 'Section';
+          }
+        }
+
+        const marker = `\n\n### TOGGLER: ${title} ###\n\n`;
+        const textNode = document.createTextNode(marker);
+        toggler.parentNode?.insertBefore(textNode, toggler);
+        togglerCount++;
+      });
+      console.log(`Added ${togglerCount} toggler markers`);
+    } catch (err) {
+      console.warn(`Failed to add toggler markers:`, err);
+    }
+
     // Check if the selector is an XPath
     if (selector.startsWith("/")) {
       console.log(`XPath: ${selector}`);
@@ -279,7 +447,21 @@ function getPageHtml(page: Page, selector = "body") {
     } else {
       // Handle as a CSS selector
       const el = document.querySelector(selector) as HTMLElement | null;
-      return el?.innerText || "";
+
+      if (!el) {
+        console.warn(`Selector "${selector}" not found, falling back to body`);
+        return document.body?.textContent?.replace(/\s+/g, ' ').trim() || "";
+      }
+
+      // Use textContent instead of innerText to capture text in collapsed/collapsible elements
+      const rawText = el.textContent || "";
+
+      // Normalize whitespace: replace multiple spaces/newlines/tabs with single space, then trim
+      const normalizedText = rawText.replace(/\s+/g, ' ').trim();
+
+      console.log(`Extracted ${normalizedText.length} characters from selector "${selector}"`);
+
+      return normalizedText;
     }
   }, selector);
 }
